@@ -94,9 +94,15 @@ Scope {
     WlSessionLock {
         id: lock
 
-        WlSessionLockSurface {
-            color: Theme.surface
-            LockSurface { lock: root }
+        Variants {
+            model: Quickshell.screens
+
+            WlSessionLockSurface {
+                required property ShellScreen modelData
+                screen: modelData
+                color: Theme.surface
+                LockSurface { lock: root }
+            }
         }
     }
 

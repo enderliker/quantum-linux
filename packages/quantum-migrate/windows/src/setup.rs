@@ -62,11 +62,18 @@ mod imp {
 
     /// Ejecuta PowerShell sin ventana; devuelve la salida o el error.
     pub fn ps(script: &str) -> Result<String, String> {
+        ps_env(script, &[])
+    }
+
+    pub fn ps_env(script: &str, envs: &[(&str, &str)]) -> Result<String, String> {
         log(&format!("ps: {}", script.lines().map(str::trim).collect::<Vec<_>>().join(" ").chars().take(160).collect::<String>()));
-        let out = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
-                   &format!("$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; try {{ {script} }} catch {{ [Console]::Error.WriteLine($_.Exception.Message); exit 1 }}")])
-            .creation_flags(NO_WINDOW).output().map_err(|e| e.to_string())?;
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+                   &format!("$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; try {{ {script} }} catch {{ [Console]::Error.WriteLine($_.Exception.Message); exit 1 }}")]);
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        let out = cmd.creation_flags(NO_WINDOW).output().map_err(|e| e.to_string())?;
         if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()) }
         else { Err(String::from_utf8_lossy(&out.stderr).trim().lines().next().unwrap_or("error").to_string()) }
     }
@@ -145,22 +152,42 @@ mod imp {
     }
 
     pub fn mount_iso(iso: &Path) -> Result<PathBuf, String> {
-        let l = ps(&format!("(Mount-DiskImage -ImagePath '{}' -PassThru | Get-Volume).DriveLetter", iso.display()))?;
+        let iso_str = iso.to_string_lossy();
+        let l = ps_env(
+            "(Mount-DiskImage -ImagePath $env:QUANTUM_ISO -PassThru | Get-Volume).DriveLetter",
+            &[("QUANTUM_ISO", &iso_str)],
+        )?;
         Ok(PathBuf::from(format!("{}:\\", l.trim())))
     }
-    pub fn unmount_iso(iso: &Path) { let _ = ps(&format!("Dismount-DiskImage -ImagePath '{}' | Out-Null", iso.display())); }
+    pub fn unmount_iso(iso: &Path) {
+        let iso_str = iso.to_string_lossy();
+        let _ = ps_env(
+            "Dismount-DiskImage -ImagePath $env:QUANTUM_ISO | Out-Null",
+            &[("QUANTUM_ISO", &iso_str)],
+        );
+    }
 
     /// Llave propia de este PC para el arranque seguro (se crea en Windows y Quantum la usa después).
     pub fn machine_key(dir: &Path, computer: &str) -> Result<Vec<u8>, String> {
-        let pfx = dir.join("MOK.pfx"); let cer = dir.join("MOK.cer");
-        ps(&format!(r#"
-            $c = New-SelfSignedCertificate -Subject 'CN=Quantum Linux - {computer}, O=Quantum Linux' -Type CodeSigningCert `
+        let pfx = dir.join("MOK.pfx");
+        let cer = dir.join("MOK.cer");
+        let pfx_str = pfx.to_string_lossy();
+        let cer_str = cer.to_string_lossy();
+        let safe_computer = computer.replace(['\r', '\n', ',', '=', ';', '\''], "");
+        ps_env(r#"
+            $subj = "CN=Quantum Linux - " + $env:QUANTUM_COMP + ", O=Quantum Linux"
+            $c = New-SelfSignedCertificate -Subject $subj -Type CodeSigningCert `
                  -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy Exportable -HashAlgorithm SHA256 `
                  -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(20)
             $pw = ConvertTo-SecureString -String 'quantum' -Force -AsPlainText
-            Export-PfxCertificate -Cert $c -FilePath '{pfx}' -Password $pw | Out-Null
-            Export-Certificate -Cert $c -FilePath '{cer}' -Type CERT | Out-Null
-            Remove-Item "Cert:\CurrentUser\My\$($c.Thumbprint)""#, pfx = pfx.display(), cer = cer.display()))?;
+            Export-PfxCertificate -Cert $c -FilePath $env:QUANTUM_PFX -Password $pw | Out-Null
+            Export-Certificate -Cert $c -FilePath $env:QUANTUM_CER -Type CERT | Out-Null
+            Remove-Item "Cert:\CurrentUser\My\$($c.Thumbprint)"
+        "#, &[
+            ("QUANTUM_COMP", &safe_computer),
+            ("QUANTUM_PFX", &pfx_str),
+            ("QUANTUM_CER", &cer_str),
+        ])?;
         std::fs::read(&cer).map_err(|e| e.to_string())
     }
 
@@ -177,7 +204,11 @@ mod imp {
 
     /// Achica C: para dejar `bytes` libres al final del disco.
     pub fn shrink_c(bytes: u64) -> Result<(), String> {
-        ps(&format!("$p=Get-Partition -DriveLetter C; Resize-Partition -DriveLetter C -Size ($p.Size - {bytes})")).map(|_| ())
+        let bytes_str = bytes.to_string();
+        ps_env(
+            "$p=Get-Partition -DriveLetter C; $s=[uint64]$env:QUANTUM_SHRINK; Resize-Partition -DriveLetter C -Size ($p.Size - $s)",
+            &[("QUANTUM_SHRINK", &bytes_str)],
+        ).map(|_| ())
     }
 
     fn privilege() {
@@ -220,7 +251,13 @@ mod imp {
     /// Partición QUANTUMINST: (número, inicio en sectores, tamaño en sectores, GUID de la partición)
     pub fn usb_partition(letter: &str) -> Result<(u32, u64, u64, String), String> {
         let l = letter.trim_end_matches(['\\', ':']);
-        let r = ps(&format!(r#"$p=Get-Partition -DriveLetter {l}; $s=(Get-Disk -Number $p.DiskNumber).LogicalSectorSize; "$($p.PartitionNumber)|$($p.Offset/$s)|$($p.Size/$s)|$($p.Guid)""#))?;
+        if l.len() != 1 || !l.chars().next().unwrap().is_ascii_alphabetic() {
+            return Err("Letra de unidad inválida".into());
+        }
+        let r = ps_env(
+            r#"$p=Get-Partition -DriveLetter $env:QUANTUM_DRIVE; $s=(Get-Disk -Number $p.DiskNumber).LogicalSectorSize; "$($p.PartitionNumber)|$($p.Offset/$s)|$($p.Size/$s)|$($p.Guid)""#,
+            &[("QUANTUM_DRIVE", l)],
+        )?;
         let p: Vec<&str> = r.split('|').collect();
         if p.len() < 4 { return Err("No pude leer la partición del pendrive".into()); }
         Ok((p[0].parse().unwrap_or(1), p[1].parse().unwrap_or(0), p[2].parse().unwrap_or(0), p[3].trim_matches(['{', '}']).to_string()))
@@ -234,6 +271,7 @@ mod imp {
 mod imp {
     use super::*;
     pub fn ps(_s: &str) -> Result<String, String> { Ok(String::new()) }
+    pub fn ps_env(_s: &str, _envs: &[(&str, &str)]) -> Result<String, String> { Ok(String::new()) }
     pub fn pc_info() -> PcInfo {
         std::thread::sleep(std::time::Duration::from_millis(600));
         PcInfo { uefi: true, secureboot: true, bitlocker: false, c_free: 180 * GB, c_shrinkable: std::env::var("PAQ_SHRINK_GB").ok().and_then(|v| v.parse().ok()).unwrap_or(200) * GB, ram: 16 * GB, unallocated: 0,

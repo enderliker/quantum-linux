@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Wayland
 import Quickshell.Services.Mpris
 import Quickshell.Services.UPower
+import Quickshell.Services.PowerProfiles
 import qs.services
 import qs.components
 import "../notifications"

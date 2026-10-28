@@ -425,6 +425,14 @@ Item {
                                 text: root.lock.success ? "lock_open" : "lock"
                                 size: 20; color: root.lock.success ? "#3DDC84" : Theme.fgMuted
                             }
+                            Connections {
+                                target: root.lock
+                                function onPasswordChanged() {
+                                    if (input.text !== root.lock.password)
+                                        input.text = root.lock.password;
+                                }
+                            }
+
                             TextInput {
                                 id: input
                                 anchors.fill: parent

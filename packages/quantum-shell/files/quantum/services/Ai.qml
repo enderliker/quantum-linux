@@ -73,13 +73,17 @@ Singleton {
                     const j = JSON.parse(line);
                     if (j.message?.content) {
                         const m = messages.slice();
-                        m[m.length - 1] = { role: "assistant", content: m[m.length - 1].content + j.message.content };
-                        messages = m;
+                        if (m.length > 0) {
+                            m[m.length - 1] = { role: "assistant", content: (m[m.length - 1]?.content ?? "") + j.message.content };
+                            messages = m;
+                        }
                     }
                     if (j.error) {
                         const m = messages.slice();
-                        m[m.length - 1] = { role: "assistant", content: "No pude responder: " + j.error };
-                        messages = m;
+                        if (m.length > 0) {
+                            m[m.length - 1] = { role: "assistant", content: "No pude responder: " + j.error };
+                            messages = m;
+                        }
                     }
                 } catch (e) {}
             }
@@ -89,7 +93,7 @@ Singleton {
             if (x.readyState === XMLHttpRequest.LOADING) consume();
             if (x.readyState === XMLHttpRequest.DONE) {
                 consume();
-                if (x.status !== 200 && !messages[messages.length - 1].content) {
+                if (x.status !== 200 && messages.length > 0 && !messages[messages.length - 1]?.content) {
                     const m = messages.slice();
                     m[m.length - 1] = { role: "assistant", content: "No pude conectarme con la IA. ¿Está encendido el servicio de Ollama?" };
                     messages = m;

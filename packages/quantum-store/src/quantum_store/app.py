@@ -12,16 +12,17 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
 import urllib.request
 from pathlib import Path
 
-from PyQt6.QtCore import (Qt, QObject, QProcess, QSize, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot)
+from PyQt6.QtCore import (Qt, QObject, QProcess, QSize, QThreadPool, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot)
 from PyQt6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon, QImage
 from PyQt6.QtQml import QQmlApplicationEngine
-from PyQt6.QtQuick import QQuickImageProvider
+from PyQt6.QtQuick import (QQuickAsyncImageProvider, QQuickImageProvider, QQuickImageResponse, QQuickTextureFactory)
 
 from .backends import CACHE, SOURCES, UA, item
 
@@ -59,28 +60,49 @@ class IconProvider(QQuickImageProvider):
         return img, img.size()
 
 
-class WebImageProvider(QQuickImageProvider):
-    """image://web/<url> → íconos y capturas de internet guardados en disco."""
+class WebImageResponse(QQuickImageResponse):
+    """Descarga o lee de caché la imagen en un hilo de fondo para no congelar la interfaz."""
+
+    def __init__(self, url_str, requested):
+        super().__init__()
+        self._url = url_str
+        self._requested = requested
+        self._img = QImage()
+        QThreadPool.globalInstance().start(self._fetch)
+
+    def _fetch(self):
+        try:
+            url = urllib.parse.unquote(self._url)
+            path = CACHE / "images" / hashlib.sha1(url.encode()).hexdigest()
+            if not path.exists():
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": UA})
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        data = r.read()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                except OSError:
+                    pass
+            if path.exists():
+                img = QImage(str(path))
+                if self._requested.width() > 0 and self._requested.height() > 0 and not img.isNull():
+                    img = img.scaled(self._requested, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self._img = img
+        finally:
+            self.finished.emit()
+
+    def textureFactory(self):
+        return QQuickTextureFactory.textureFactoryForImage(self._img)
+
+
+class WebImageProvider(QQuickAsyncImageProvider):
+    """image://web/<url> → íconos y capturas de internet descargados asíncronamente y guardados en disco."""
 
     def __init__(self):
-        super().__init__(QQuickImageProvider.ImageType.Image)
+        super().__init__()
 
-    def requestImage(self, url, requested):
-        url = urllib.parse.unquote(url)
-        path = CACHE / "images" / hashlib.sha1(url.encode()).hexdigest()
-        if not path.exists():
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": UA})
-                with urllib.request.urlopen(req, timeout=20) as r:
-                    data = r.read()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(data)
-            except OSError:
-                return QImage(), QSize()
-        img = QImage(str(path))
-        if requested.width() > 0 and requested.height() > 0 and not img.isNull():
-            img = img.scaled(requested, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        return img, img.size()
+    def requestImageResponse(self, url, requested):
+        return WebImageResponse(url, requested)
 
 
 class Store(QObject):
@@ -333,7 +355,18 @@ class Store(QObject):
             QProcess.startDetached("waydroid", ["app", "launch", id_])
         else:
             # repos/AUR: buscar su .desktop por nombre de paquete
-            QProcess.startDetached("sh", ["-c", f"gtk-launch $(pacman -Qlq {id_} | grep -m1 '/usr/share/applications/.*\\.desktop$' | xargs -r basename)"])
+            desktop = None
+            try:
+                res = subprocess.run(["pacman", "-Qlq", id_], capture_output=True, text=True, check=False)
+                if res.returncode == 0:
+                    for line in res.stdout.splitlines():
+                        if line.startswith("/usr/share/applications/") and line.endswith(".desktop"):
+                            desktop = os.path.basename(line)
+                            break
+            except Exception:
+                pass
+            if desktop:
+                QProcess.startDetached("gtk-launch", [desktop])
 
     @pyqtSlot(str)
     def cancel(self, key):

@@ -253,15 +253,27 @@ class Android:
         CACHE.mkdir(parents=True, exist_ok=True)
         raw = CACHE / "fdroid-index-v2.json"
         req = urllib.request.Request(f"{self.REPO}/index-v2.json", headers={"User-Agent": UA, "Accept-Encoding": "gzip"})
-        with urllib.request.urlopen(req, timeout=60) as r, open(raw, "wb") as f:
+        with urllib.request.urlopen(req, timeout=60) as r:
             total = int(r.headers.get("Content-Length") or 0)
+            is_gzip = r.headers.get("Content-Encoding") == "gzip"
+            target = raw.with_suffix(".tmp.gz") if is_gzip else raw.with_suffix(".tmp")
             done = 0
-            stream = gzip.GzipFile(fileobj=r) if r.headers.get("Content-Encoding") == "gzip" else r
-            while chunk := stream.read(1 << 16):
-                f.write(chunk)
-                done += len(chunk)
-                if progress and total:
-                    progress(min(0.99, done / total))
+            with open(target, "wb") as f:
+                while chunk := r.read(1 << 16):
+                    f.write(chunk)
+                    done += len(chunk)
+                    if progress and total:
+                        progress(min(0.95, done / total))
+        if is_gzip:
+            if progress:
+                progress(0.96)
+            with gzip.open(target, "rb") as gz_in, open(raw, "wb") as f_out:
+                shutil.copyfileobj(gz_in, f_out)
+            target.unlink(missing_ok=True)
+        else:
+            target.replace(raw)
+        if progress:
+            progress(1.0)
         idx = json.loads(raw.read_text())
         apps = []
         for pkg, p in idx.get("packages", {}).items():

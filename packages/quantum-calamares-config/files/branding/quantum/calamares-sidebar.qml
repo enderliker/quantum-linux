@@ -37,7 +37,7 @@ Rectangle {
             Layout.bottomMargin: 28
             spacing: 10
             Image {
-                source: "file:/" + Branding.imagePath(Branding.ProductLogo)
+                source: "file://" + Branding.imagePath(Branding.ProductLogo)
                 sourceSize.width: 88; sourceSize.height: 88
                 Layout.preferredWidth: 44; Layout.preferredHeight: 44
             }

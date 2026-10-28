@@ -65,6 +65,6 @@ done
 
 msg "Actualizando el índice del repositorio"
 cd "$REPO"
-rm -f brasa.db* brasa.files* quantum.db* quantum.files* ./*-debug-*.pkg.tar.zst ./brasa-*.pkg.tar.zst
+rm -f quantum.db* quantum.files* ./*-debug-*.pkg.tar.zst
 repo-add -q quantum.db.tar.gz ./*.pkg.tar.zst
 msg "Repositorio listo en $REPO"

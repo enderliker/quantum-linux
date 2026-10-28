@@ -43,7 +43,7 @@ Singleton {
     // Los cambios de volumen hechos fuera del shell (teclas multimedia) también muestran el OSD
     Connections {
         target: root.sink?.audio ?? null
-        function onVolumesChanged() { root.changed(); }
+        function onVolumeChanged() { root.changed(); }
         function onMutedChanged() { root.changed(); }
     }
 }

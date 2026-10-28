@@ -1,7 +1,14 @@
-// Modo en vivo: el usuario liveuser no tiene contraseña, así que se le
-// permite todo sin pedirla. El instalador borra este archivo.
+// Modo en vivo: permisos para el instalador (Calamares), discos, red y energía.
+// El instalador borra este archivo al instalar en disco.
 polkit.addRule(function(action, subject) {
-    if (subject.user == "liveuser") {
-        return polkit.Result.YES;
+    if (subject.user === "liveuser") {
+        if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 ||
+            action.id.indexOf("org.freedesktop.udisks2.") === 0 ||
+            action.id.indexOf("org.freedesktop.login1.") === 0 ||
+            action.id.indexOf("org.freedesktop.timedate1.") === 0 ||
+            action.id.indexOf("org.freedesktop.policykit.exec") === 0 ||
+            action.id.indexOf("io.calamares.") === 0) {
+            return polkit.Result.YES;
+        }
     }
 });

@@ -15,8 +15,12 @@ Singleton {
         .slice()
         .sort((a, b) => a.name.localeCompare(b.name, "es"))
 
-    function normalize(s: string): string {
-        return (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    function normalize(s: var): string {
+        if (s === undefined || s === null)
+            return "";
+        if (Array.isArray(s))
+            return s.map(item => normalize(item)).join(" ");
+        return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     }
 
     function search(query: string): var {

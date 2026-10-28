@@ -61,6 +61,8 @@ Singleton {
                     Quickshell.execDetached(["notify-send", "-a", "Quantum Linux", "-i", "system-software-update",
                                              "Hay " + root.count + " actualizaciones" + extra,
                                              "Toca el ícono de actualizaciones en la barra para instalarlas."]);
+                } else if (root.count === 0) {
+                    root.notifiedFor = 0;
                 }
             }
         }

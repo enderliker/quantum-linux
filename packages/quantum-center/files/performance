@@ -6,7 +6,7 @@
 set -euo pipefail
 
 STATE=/var/lib/quantum/performance
-REPO_URL=https://mirror.cachyos.org/cachyos-repo.tar.xz
+CACHYOS_GPG_KEY=F3B607488BE357A5
 
 cpu_level() {
     local out
@@ -18,27 +18,104 @@ cpu_level() {
 
 status() {
     local repo=off sched=off
-    grep -q '^\[cachyos' /etc/pacman.conf && repo=on
+    [[ -f /etc/pacman.conf ]] && grep -q '^\[cachyos' /etc/pacman.conf && repo=on
     systemctl is-enabled -q scx_loader.service 2>/dev/null && sched=on
     echo "cpu=$(cpu_level) repo=$repo sched=$sched"
 }
 
-with_cachyos_script() {
-    local tmp
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' RETURN
-    echo "==> Descargando el instalador oficial de los repos de CachyOS…"
-    curl -fL --progress-bar -o "$tmp/repo.tar.xz" "$REPO_URL"
-    tar -xf "$tmp/repo.tar.xz" -C "$tmp"
-    (cd "$tmp/cachyos-repo" && ./cachyos-repo.sh "$1")
+setup_cachyos_repos() {
+    local level="$1"
+    echo "==> Configurando clave GPG oficial de CachyOS en pacman-key…"
+    pacman-key --recv-keys "$CACHYOS_GPG_KEY" >/dev/null 2>&1 || \
+        pacman-key --recv-keys "$CACHYOS_GPG_KEY" --keyserver keyserver.ubuntu.com >/dev/null 2>&1 || \
+        pacman-key --recv-keys "$CACHYOS_GPG_KEY" --keyserver hkps://keys.openpgp.org >/dev/null 2>&1
+    pacman-key --lsign-key "$CACHYOS_GPG_KEY" >/dev/null 2>&1
+
+    echo "==> Configurando listas de servidores de CachyOS…"
+    mkdir -p /etc/pacman.d
+    cat > /etc/pacman.d/cachyos-mirrorlist <<'EOF'
+Server = https://mirror.cachyos.org/repo/$arch/$repo
+EOF
+    cat > /etc/pacman.d/cachyos-v3-mirrorlist <<'EOF'
+Server = https://mirror.cachyos.org/repo/$arch_v3/$repo
+EOF
+    cat > /etc/pacman.d/cachyos-v4-mirrorlist <<'EOF'
+Server = https://mirror.cachyos.org/repo/$arch_v4/$repo
+EOF
+
+    local block_file
+    block_file=$(mktemp)
+    if [[ "$level" == "v4" ]]; then
+        cat > "$block_file" <<'EOF'
+# BEGIN CACHYOS
+[cachyos-v4]
+Include = /etc/pacman.d/cachyos-v4-mirrorlist
+
+[cachyos-core-v4]
+Include = /etc/pacman.d/cachyos-v4-mirrorlist
+
+[cachyos-extra-v4]
+Include = /etc/pacman.d/cachyos-v4-mirrorlist
+
+[cachyos]
+Include = /etc/pacman.d/cachyos-mirrorlist
+# END CACHYOS
+EOF
+    else
+        cat > "$block_file" <<'EOF'
+# BEGIN CACHYOS
+[cachyos-v3]
+Include = /etc/pacman.d/cachyos-v3-mirrorlist
+
+[cachyos-core-v3]
+Include = /etc/pacman.d/cachyos-v3-mirrorlist
+
+[cachyos-extra-v3]
+Include = /etc/pacman.d/cachyos-v3-mirrorlist
+
+[cachyos]
+Include = /etc/pacman.d/cachyos-mirrorlist
+# END CACHYOS
+EOF
+    fi
+
+    echo "==> Integrando repositorios de CachyOS en /etc/pacman.conf…"
+    python3 -c "
+with open('/etc/pacman.conf', 'r') as f:
+    content = f.read()
+if '[cachyos' not in content:
+    with open('$block_file', 'r') as bf:
+        block = bf.read()
+    if '[core]' in content:
+        content = content.replace('[core]', block + '\n[core]')
+    else:
+        content += '\n' + block
+    with open('/etc/pacman.conf', 'w') as f:
+        f.write(content)
+"
+    rm -f "$block_file"
+    echo "==> Actualizando base de datos de paquetes con CachyOS…"
+    pacman -Sy --needed --noconfirm cachyos-keyring cachyos-mirrorlist cachyos-v3-mirrorlist 2>/dev/null || pacman -Sy
+}
+
+remove_cachyos_repos() {
+    echo "==> Removiendo repositorios de CachyOS de /etc/pacman.conf…"
+    sed -i '/# BEGIN CACHYOS/,/# END CACHYOS/d' /etc/pacman.conf
+    # Limpieza por si quedaron entradas sueltas previas
+    sed -i '/^\[cachyos/d; /Include = \/etc\/pacman\.d\/cachyos/d' /etc/pacman.conf
+    rm -f /etc/pacman.d/cachyos*mirrorlist
+    echo "==> Actualizando base de datos de paquetes estándar…"
+    pacman -Sy
 }
 
 enable() {
-    if [[ $(cpu_level) == old ]]; then
+    local level
+    level=$(cpu_level)
+    if [[ "$level" == old ]]; then
         echo "Tu procesador no es compatible con los paquetes optimizados (necesita x86-64-v3)."
         echo "Solo se activará el planificador para juegos."
     else
-        with_cachyos_script --install
+        setup_cachyos_repos "$level"
     fi
     echo "==> Activando el planificador para juegos (scx_lavd)…"
     pacman -S --needed --noconfirm scx-scheds scx-tools
@@ -57,7 +134,7 @@ disable() {
     systemctl disable --now scx_loader.service 2>/dev/null || true
     rm -f /etc/scx_loader.toml
     if grep -q '^\[cachyos' /etc/pacman.conf; then
-        with_cachyos_script --remove
+        remove_cachyos_repos
     fi
     rm -f "$STATE"
     echo

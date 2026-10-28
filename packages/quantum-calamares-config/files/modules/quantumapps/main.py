@@ -103,20 +103,31 @@ def install_ai(root, model, when):
         try:
             time.sleep(3)
             base = used_bytes(models)
-            p = subprocess.Popen([ollama, "pull", model], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            p = subprocess.Popen([ollama, "pull", model], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             start = time.time()
             while p.poll() is None:
                 if time.time() - start > 40 * 60:
                     p.kill()
+                    try:
+                        p.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
                     break
                 mb = max(0, used_bytes(models) - base) // (1024 * 1024)
                 status = f"Descargando la IA ({model}) · {mb} MB"
                 time.sleep(1)
+            p.poll()
             if p.returncode == 0:
-                os.remove(os.path.join(root, "var/lib/quantum/ai-model"))
+                ai_model_file = os.path.join(root, "var/lib/quantum/ai-model")
+                if os.path.exists(ai_model_file):
+                    os.remove(ai_model_file)
         finally:
             srv.terminate()
-            srv.wait(timeout=20)
+            try:
+                srv.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                srv.kill()
+                srv.wait(timeout=5)
         libcalamares.utils.target_env_call(["chown", "-R", "ollama:ollama", "/var/lib/ollama"])
     except Exception as e:
         libcalamares.utils.warning(f"quantumapps: asistente: {e}")

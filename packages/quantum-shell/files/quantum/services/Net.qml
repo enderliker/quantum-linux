@@ -111,8 +111,10 @@ Singleton {
     // Enciende el escáner: es lo que hace que NetworkManager liste las redes.
     function startScan(): void {
         if (demo) {
-            if (demoNetworks.length === 0)
-                demoProc.exec(["cat", demoPath]);
+            if (demoNetworks.length === 0) {
+                demoProc.command = ["cat", demoPath];
+                demoProc.running = true;
+            }
             return;
         }
         const dev = wifiDevice;
